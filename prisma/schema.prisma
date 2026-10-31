@@ -1,0 +1,276 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  ADMIN
+  CLIENT
+}
+
+enum SiteStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum Niche {
+  CLUB
+  BAR
+  RESTAURANT
+  CAFE
+  GYM
+  BARBERSHOP
+  OTHER
+}
+
+// Módulos que se pueden activar por cliente
+enum ModuleKey {
+  MUSIC
+  BOOKING
+  REVIEWS
+}
+
+enum EventType {
+  EVENT
+  PROMOTION
+}
+
+enum MusicProvider {
+  SPOTIFY
+  YOUTUBE
+  DEEZER
+  ITUNES
+}
+
+enum RequestStatus {
+  PENDING
+  PLAYED
+  REJECTED
+}
+
+enum ActivityType {
+  VISIT
+  SEARCH
+  REQUEST
+  VOTE
+  PLAYED
+  REJECTED
+}
+
+// ------------------------- USUARIOS ----------------------------
+// Solo ADMIN y CLIENT. Los asistentes NO tienen cuenta.
+// Cuando añadamos Auth.js o Better Auth, puede que haya que
+// ajustar o agregar tablas (sesiones, cuentas).
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         Role     @default(CLIENT)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  sites Site[]
+}
+
+// ------------------- SITIO (TENANT / CLIENTE) ------------------
+
+model Site {
+  id      String @id @default(cuid())
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id])
+
+  slug   String     @unique // merotemazo.com/{slug}
+  name   String
+  niche  Niche      @default(CLUB)
+  status SiteStatus @default(ACTIVE)
+
+  tagline     String?
+  description String? @db.Text
+
+  // Identidad visual
+  logoUrl        String?
+  coverUrl       String?
+  primaryColor   String  @default("#7c3aed")
+  secondaryColor String  @default("#0f172a")
+
+  // Ubicación
+  address   String?
+  city      String?
+  latitude  Decimal? @db.Decimal(10, 7)
+  longitude Decimal? @db.Decimal(10, 7)
+  mapsUrl   String?  @db.Text // URL de Google Maps / embed
+
+  // Redes y contacto
+  instagram String?
+  facebook  String?
+  tiktok    String?
+  whatsapp  String?
+  website   String?
+
+  // Configuración regional
+  currency String @default("COP")
+  timezone String @default("America/Bogota")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  modules    SiteModule[]
+  photos     SitePhoto[]
+  categories CatalogCategory[]
+  items      CatalogItem[]
+  events     Event[]
+  requests   SongRequest[]
+  activity   ActivityLog[]
+
+  @@index([ownerId])
+}
+
+// Si existe la fila, el módulo está activo para ese sitio
+model SiteModule {
+  id        String    @id @default(cuid())
+  siteId    String
+  site      Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  module    ModuleKey
+  createdAt DateTime  @default(now())
+
+  @@unique([siteId, module])
+}
+
+model SitePhoto {
+  id        String   @id @default(cuid())
+  siteId    String
+  site      Site     @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  url       String   @db.Text
+  caption   String?
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+
+  @@index([siteId, position])
+}
+
+// ------------------------- CATÁLOGO ----------------------------
+// Sirve para tragos, platos, planes de gimnasio, servicios...
+
+model CatalogCategory {
+  id       String @id @default(cuid())
+  siteId   String
+  site     Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  name     String // "Cocteles", "Cervezas", "Botellas"...
+  position Int    @default(0)
+
+  items CatalogItem[]
+
+  @@index([siteId, position])
+}
+
+model CatalogItem {
+  id          String          @id @default(cuid())
+  siteId      String // redundante a propósito: facilita filtrar por tenant
+  site        Site            @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  categoryId  String?
+  category    CatalogCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  name        String
+  description String?  @db.Text
+  price       Decimal  @db.Decimal(12, 2)
+  imageUrl    String?  @db.Text
+  isAvailable Boolean  @default(true)
+  position    Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([siteId, categoryId, position])
+}
+
+// ----------------------- EVENTOS / PROMOS ----------------------
+
+model Event {
+  id          String    @id @default(cuid())
+  siteId      String
+  site        Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  type        EventType @default(EVENT)
+  title       String
+  description String?   @db.Text
+  imageUrl    String?   @db.Text
+  startsAt    DateTime?
+  endsAt      DateTime?
+  isActive    Boolean   @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([siteId, isActive, startsAt])
+}
+
+// ---------------- MÓDULO MÚSICA: PETICIONES Y VOTOS ------------
+
+model SongRequest {
+  id     String @id @default(cuid())
+  siteId String
+  site   Site   @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  provider        MusicProvider
+  providerTrackId String
+  title           String        @db.VarChar(255)
+  artist          String        @db.VarChar(255)
+  coverUrl        String?       @db.Text
+  durationMs      Int?
+
+  status RequestStatus @default(PENDING)
+
+  // Contadores desnormalizados (se actualizan al votar) para ordenar rápido
+  upvotes   Int @default(0)
+  downvotes Int @default(0)
+  score     Int @default(0) // upvotes - downvotes
+
+  // Evita duplicados PENDIENTES de la misma canción en el mismo sitio.
+  // Se llena con "siteId:provider:trackId" mientras status = PENDING
+  // y se deja en NULL al pasar a PLAYED/REJECTED. Como los NULL no
+  // chocan en un índice único, la canción puede volver a pedirse luego.
+  pendingKey String? @unique
+
+  createdAt DateTime  @default(now())
+  playedAt  DateTime?
+
+  votes Vote[]
+
+  @@index([siteId, status, score])
+  @@index([siteId, status, playedAt])
+}
+
+model Vote {
+  id        String      @id @default(cuid())
+  requestId String
+  request   SongRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  // Hash de cookie/fingerprint (nunca guardes datos crudos del dispositivo)
+  voterHash String
+  value     Int // +1 o -1
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Un voto por persona y canción. Si cambia de opinión, se actualiza.
+  @@unique([requestId, voterHash])
+  @@index([voterHash])
+}
+
+// ----------------------- ACTIVIDAD / MÉTRICAS ------------------
+
+model ActivityLog {
+  id        String       @id @default(cuid())
+  siteId    String
+  site      Site         @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  type      ActivityType
+  voterHash String?
+  metadata  Json? // ej: { "query": "bad bunny", "requestId": "..." }
+  createdAt DateTime     @default(now())
+
+  @@index([siteId, createdAt])
+  @@index([siteId, type, createdAt])
+}
