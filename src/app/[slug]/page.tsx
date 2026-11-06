@@ -2,7 +2,7 @@
 //
 // Página pública de PRUEBA para verificar que base de datos, Prisma y la
 // ruta dinámica funcionan. Más adelante la reemplazaremos por el diseño final.
-
+import Link from "next/link";
 import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { getPublicSiteBySlug } from "@/server/services/sites";
@@ -125,6 +125,13 @@ async function SiteContent({ params }: Props) {
       {hasMusic && (
         <section className="space-y-3">
           <h2 className="text-2xl font-semibold">Canciones más pedidas</h2>
+          <Link
+            href={`/${site.slug}/musica`}
+            className="inline-block rounded-full px-5 py-3 font-semibold text-white"
+            style={{ backgroundColor: site.primaryColor }}
+          >
+            Pedir una canción
+          </Link>
           <ol className="space-y-2">
             {site.requests.map((request, index) => (
               <li

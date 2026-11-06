@@ -7,10 +7,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum Role {
-  ADMIN
-  CLIENT
-}
+
 
 enum SiteStatus {
   ACTIVE
@@ -66,18 +63,7 @@ enum ActivityType {
 // Cuando añadamos Auth.js o Better Auth, puede que haya que
 // ajustar o agregar tablas (sesiones, cuentas).
 
-model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  name         String
-  passwordHash String
-  role         Role     @default(CLIENT)
-  isActive     Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
 
-  sites Site[]
-}
 
 // ------------------- SITIO (TENANT / CLIENTE) ------------------
 
@@ -273,4 +259,78 @@ model ActivityLog {
 
   @@index([siteId, createdAt])
   @@index([siteId, type, createdAt])
+}
+
+
+model User {
+  id            String   @id @default(cuid())
+  name          String
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  image         String?  @db.Text
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Campos que agrega el plugin admin
+  role       String?   @default("user") // "admin" | "user" (se admiten varios separados por coma)
+  banned     Boolean?  @default(false)
+  banReason  String?   @db.Text
+  banExpires DateTime?
+
+  sessions Session[]
+  accounts Account[]
+  sites    Site[] // clubes de los que este usuario es dueño
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  ipAddress String?
+  userAgent String?  @db.Text
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Plugin admin: id del admin que está "suplantando" esta sesión
+  impersonatedBy String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// Una fila por método de acceso. Para correo + contraseña:
+// providerId = "credential" y la contraseña cifrada en `password`.
+model Account {
+  id         String @id @default(cuid())
+  accountId  String
+  providerId String
+  userId     String
+  user       User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  accessToken           String?   @db.Text
+  refreshToken          String?   @db.Text
+  idToken               String?   @db.Text
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?   @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+}
+
+// Tokens temporales (verificar correo, restablecer contraseña)
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String   @db.Text
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
 }
