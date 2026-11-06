@@ -6,7 +6,6 @@
 
 import {
   PrismaClient,
-  Role,
   Niche,
   SiteStatus,
   ModuleKey,
@@ -15,12 +14,39 @@ import {
   RequestStatus,
   ActivityType,
 } from "@prisma/client";
-import bcrypt from "bcryptjs";
+import { betterAuth } from "better-auth";
+import { prismaAdapter } from "better-auth/adapters/prisma";
+import { admin as adminPlugin } from "better-auth/plugins";
 
 const prisma = new PrismaClient();
 
+// Instancia de Better Auth SOLO para el seed (sin dependencias de Next.js).
+// Usa el mismo cifrado de contraseñas que la app real. El secreto no importa
+// aquí porque el seed no crea sesiones.
+const authForSeed = betterAuth({
+  database: prismaAdapter(prisma, { provider: "mysql" }),
+  secret: process.env.BETTER_AUTH_SECRET ?? "seed-only-secret-seed-only-secret-0000",
+  emailAndPassword: { enabled: true, disableSignUp: true },
+  plugins: [adminPlugin()],
+});
+
+// Crea el usuario si no existe (la contraseña se guarda cifrada en la tabla Account)
+async function ensureUser(input: {
+  email: string;
+  password: string;
+  name: string;
+  role: "admin" | "user";
+}) {
+  const existing = await prisma.user.findUnique({ where: { email: input.email } });
+  if (existing) return existing;
+
+  await authForSeed.api.createUser({ body: input });
+  return prisma.user.findUniqueOrThrow({ where: { email: input.email } });
+}
+
 const ADMIN = { email: "admin@merotemazo.com", password: "Admin12345!" };
 const CLIENT = { email: "cliente@clubfenix.com", password: "Cliente12345!" };
+const CLIENT2 = { email: "cliente2@laterraza.com", password: "Cliente12345!" };
 const SITE_SLUG = "club-fenix";
 
 // ---------- utilidades ----------
@@ -45,26 +71,25 @@ async function main() {
   console.log("🌱 Iniciando seed...");
 
   // 1) Usuarios
-  const admin = await prisma.user.upsert({
-    where: { email: ADMIN.email },
-    update: {},
-    create: {
-      email: ADMIN.email,
-      name: "Administrador Merotemazo",
-      passwordHash: await bcrypt.hash(ADMIN.password, 10),
-      role: Role.ADMIN,
-    },
+  const admin = await ensureUser({
+    email: ADMIN.email,
+    password: ADMIN.password,
+    name: "Administrador Merotemazo",
+    role: "admin",
   });
 
-  const client = await prisma.user.upsert({
-    where: { email: CLIENT.email },
-    update: {},
-    create: {
-      email: CLIENT.email,
-      name: "Dueño Club Fénix",
-      passwordHash: await bcrypt.hash(CLIENT.password, 10),
-      role: Role.CLIENT,
-    },
+  const client = await ensureUser({
+    email: CLIENT.email,
+    password: CLIENT.password,
+    name: "Dueño Club Fénix",
+    role: "user", // "user" = cliente (dueño de un club)
+  });
+
+  const client2 = await ensureUser({
+    email: CLIENT2.email,
+    password: CLIENT2.password,
+    name: "Dueño La Terraza",
+    role: "user",
   });
 
   // 2) Sitio (club de prueba)
@@ -99,6 +124,29 @@ async function main() {
     where: { siteId_module: { siteId: site.id, module: ModuleKey.MUSIC } },
     update: {},
     create: { siteId: site.id, module: ModuleKey.MUSIC },
+  });
+
+  // 3b) Segundo club de OTRO dueño, para probar el aislamiento entre clientes
+  const site2 = await prisma.site.upsert({
+    where: { slug: "la-terraza" },
+    update: {},
+    create: {
+      ownerId: client2.id,
+      slug: "la-terraza",
+      name: "La Terraza",
+      niche: Niche.BAR,
+      status: SiteStatus.ACTIVE,
+      tagline: "Música y cocteles al aire libre",
+      address: "Carrera 7 # 45-10 (dirección de prueba)",
+      city: "Bogotá",
+      primaryColor: "#0ea5e9",
+    },
+  });
+
+  await prisma.siteModule.upsert({
+    where: { siteId_module: { siteId: site2.id, module: ModuleKey.MUSIC } },
+    update: {},
+    create: { siteId: site2.id, module: ModuleKey.MUSIC },
   });
 
   // 4) Limpiar datos hijos para poder re-ejecutar el seed sin duplicar
@@ -245,6 +293,7 @@ async function main() {
   console.log("✅ Seed completado.\n");
   console.log("   ADMIN   →", ADMIN.email, "/", ADMIN.password, `(id: ${admin.id})`);
   console.log("   CLIENTE →", CLIENT.email, "/", CLIENT.password);
+  console.log("   CLIENTE 2 →", CLIENT2.email, "/", CLIENT2.password);
   console.log(`   CLUB    → http://localhost:3000/${SITE_SLUG}`);
 }
 
